@@ -512,6 +512,11 @@ static uart_dev_t g_uart4port = {
 };
 #endif
 
+/* FIFO Drain buffer for UART PG wakeup */
+static ALIGNMTO(CACHE_LINE_SIZE) u8 g_uart1_buf[256] = { 0 };
+static u32 g_uart1_buf_head = &g_uart1_buf;
+static u32 g_uart1_dataleft = 0;
+
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
@@ -1052,8 +1057,28 @@ static int rtl8730e_up_receive(struct uart_dev_s *dev, unsigned int*status)
 	uint32_t rxd;
 
 	DEBUGASSERT(priv);
-	rxd = serial_getc(sdrv[uart_index_get(priv->tx)]);
-	*status = rxd;
+	
+	/* if there is still data in the FIFO drain buffer, read from there, otherwise read from peripheral */
+	if (g_uart1_dataleft > 0) {
+		rxd = *((u8 *)g_uart1_buf_head);
+		g_uart1_buf_head++;
+		g_uart1_dataleft--;
+
+		/* prevent g_uart1_buf_head from overflow */
+		if (((u32)g_uart1_buf_head - (u32)g_uart1_buf) > sizeof(g_uart1_buf)) {
+			DiagPrintf("Head pointer exceed buffer size!\n");
+			g_uart1_buf_head--;
+		}
+
+		/* prevent g_uart1_dataleft from underflow */
+		if (g_uart1_dataleft == 0xFFFFFFFF) {
+			g_uart1_dataleft = 0;
+		}
+	} else {
+		/* read from FIFO */ 
+		rxd = serial_getc(sdrv[uart_index_get(priv->tx)]);
+		*status = rxd;
+	}
 
 	return rxd & 0xff;
 }
@@ -1085,7 +1110,12 @@ static bool rtl8730e_up_rxavailable(struct uart_dev_s *dev)
 {
 	struct rtl8730e_up_dev_s *priv = (struct rtl8730e_up_dev_s *)dev->priv;
 	DEBUGASSERT(priv);
-	return (serial_readable(sdrv[uart_index_get(priv->tx)]));
+
+	/* there is data available if either FIFO DRDY==1 or there is stuff in drain buffer */
+	u8 fifo_hasdata = serial_readable(sdrv[uart_index_get(priv->tx)]);
+	u8 buf_hasdata = g_uart1_dataleft > 0;
+
+	return (fifo_hasdata || buf_hasdata);
 }
 
 /****************************************************************************
@@ -1201,6 +1231,37 @@ static uint32_t rtk_uart_suspend(uint32_t expected_idle_time, void *param)
 {
 	(void)expected_idle_time;
 	(void)param;
+
+	ALIGNMTO(CACHE_LINE_SIZE) u8 flag[CACHE_LINE_ALIGMENT(64)];
+	ALIGNMTO(CACHE_LINE_SIZE) u32 uart_data[16];
+	IPC_MSG_STRUCT ipc_req_msg  __attribute__((aligned(64)));
+	ipc_req_msg.msg_type = IPC_USER_POINT;
+	ipc_req_msg.msg = (u32)uart_data;
+	ipc_req_msg.msg_len = sizeof(uart_data);
+	ipc_req_msg.rsvd = (u32)flag;
+
+	memset(flag, 0, sizeof(flag));
+	memset(uart_data, 0, sizeof(uart_data));
+	/* indicate CA32 is ready to rx, switch back to CA32 */
+	uart_data[0] = g_uart1priv.tx; 					//tx
+	uart_data[1] = g_uart1priv.rx;					//rx
+	uart_data[2] = uart_index_get(g_uart1priv.tx); 	//uart_idx
+	uart_data[3] = g_uart1priv.baud; 				//uart baudrate
+	uart_data[4] = g_uart1priv.parity; 				//parity
+	uart_data[5] = g_uart1priv.bits; 				//bits
+	uart_data[6] = g_uart1priv.stopbit; 			//stop bit
+	uart_data[7] = 1; 								//1 switch to KM4, 0 switch to CA32
+
+	DCache_Clean((u32)uart_data, sizeof(uart_data));
+	ipc_send_message(IPC_AP_TO_NP, IPC_A2N_UART, &ipc_req_msg); 
+
+	while (1) {
+		DCache_Invalidate((u32)flag, sizeof(flag));
+		if (flag[0]) {
+			break;
+		}
+	}
+
 #ifdef CONFIG_RTL8730E_UART1
 	if (sdrv[uart_index_get(g_uart1priv.tx)] != NULL) {
 		serial_change_clcksrc(sdrv[uart_index_get(g_uart1priv.tx)], g_uart1priv.baud, 0);
@@ -1213,6 +1274,70 @@ static uint32_t rtk_uart_resume(uint32_t expected_idle_time, void *param)
 {
 	(void)expected_idle_time;
 	(void)param;
+
+	ALIGNMTO(CACHE_LINE_SIZE) u8 flag[CACHE_LINE_ALIGMENT(64)];
+	ALIGNMTO(CACHE_LINE_SIZE) u32 uart_data[16];
+
+	/* reset buffer and head pointer for FIFO drain buffer */
+	g_uart1_dataleft = 0;
+	memset(g_uart1_buf, 0, sizeof(g_uart1_buf));
+	g_uart1_buf_head = &g_uart1_buf;
+
+	IPC_MSG_STRUCT ipc_req_msg  __attribute__((aligned(64)));
+	ipc_req_msg.msg_type = IPC_USER_POINT;
+	ipc_req_msg.msg = (u32)uart_data;
+	ipc_req_msg.msg_len = sizeof(uart_data);
+	ipc_req_msg.rsvd = (u32)flag;
+
+	memset(flag, 0, sizeof(flag));
+	memset(uart_data, 0, sizeof(uart_data));
+
+	/* indicate CA32 is ready to rx, switch back to CA32 */
+	uart_data[2] = uart_index_get(g_uart1priv.tx);
+	uart_data[7] = 0; 								// 1 switch to KM4, 0 switch to CA32
+	uart_data[10] = 0;								// hold the length of km4 data
+	uart_data[11] = (u32)g_uart1_buf;				// buffer to hold drained FIFO data
+
+	/* prepare buffers and notify KM4 to begin resume process */
+	DCache_Clean((u32)uart_data, sizeof(uart_data));
+	DCache_Clean((u32)g_uart1_buf, sizeof(g_uart1_buf));
+	ipc_send_message(IPC_AP_TO_NP, IPC_A2N_UART, &ipc_req_msg); 
+
+	/* wait for KM4 to finish the drain on its side */
+	while (1) {
+		DCache_Invalidate((u32)flag, sizeof(flag));
+		if (flag[0]) {
+			/* invalidate the cache to receive the drained FIFO data */
+			DCache_Invalidate((u32)g_uart1_buf, sizeof(g_uart1_buf));
+			DCache_Invalidate((u32)uart_data, sizeof(uart_data));
+
+			/* null terminate for safety */
+			g_uart1_buf[uart_data[10]] = 0;
+			break;
+		}
+	}
+
+	/* 
+	 * control has switched back from KM4 to CA32. 
+	 * KM4 has stopped reading the FIFO, so now we can drain it in CA32
+	 * no extra config on the peripheral should be done except detach attach irq as required
+	 */
+	u8 ch = 0;
+	g_uart1_dataleft = uart_data[10];
+	UART_TypeDef* uartx = UART_DEV_TABLE[uart_index_get(g_uart1priv.tx)].UARTx;
+
+	/* prevent PM transition while fetching remainder FIFO */
+	pm_timedsuspend(pm_domain_register("UART_PG_WAKE"), 5000);
+
+	/* drain the remainder FIFO from CA32 side */
+	while (UART_Readable(uartx) == 1) {
+		UART_CharGet(uartx, &ch);
+		g_uart1_buf[g_uart1_dataleft++] = ch;
+	}
+
+	/* force clear Rx status (this is normally done with API, but poll mode require manual clearing */
+	UART_INT_Clear(uartx, RUART_BIT_RLSICF);
+
 #ifdef CONFIG_RTL8730E_UART1
 	if (sdrv[uart_index_get(g_uart1priv.tx)] != NULL) {
 		serial_change_clcksrc(sdrv[uart_index_get(g_uart1priv.tx)], g_uart1priv.baud, 1);
@@ -1220,7 +1345,7 @@ static uint32_t rtk_uart_resume(uint32_t expected_idle_time, void *param)
 #endif
 	return 1;
 }
-#endif
+#endif							/* CONFIG_PM */
 
 /****************************************************************************
  * Public Functions
