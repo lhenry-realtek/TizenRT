@@ -57,6 +57,8 @@
 #include <tinyara/config.h>
 #include <stdio.h>
 
+#include <tinyara/gpio.h>
+#include <fcntl.h>
 /****************************************************************************
  * hello_main
  ****************************************************************************/
@@ -68,5 +70,10 @@ int hello_main(int argc, char *argv[])
 #endif
 {
 	printf("Hello, World!!\n");
+
+	int fd = open("/dev/gpio52", O_RDWR);
+	printf("gpio 52 fd: %d\n", fd);
+	ioctl(fd, GPIOIOC_SET_INTERRUPT, GPIO_EDGE_RISING);
+	while(1);
 	return 0;
 }

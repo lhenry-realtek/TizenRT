@@ -735,6 +735,44 @@ int tash_cmd_install(const char *str, TASH_CMD_CALLBACK cb, int thread_exec)
 	return 0;
 }
 
+#include <tinyara/arch.h>
+void tash_irq_set_affinity(int argc, char *argv[])
+{
+	if (argc != 3) {
+		printf("irqaffset <irqnum> <'cpu0'/'cpu1'>\n");
+		return;
+	}
+
+	int8_t cpu = -1;
+	cpu_set_t cpuset;
+	CPU_ZERO(&cpuset);
+
+	if (strncmp(argv[2], "cpu0", 4) == 0) {
+		cpu = 0;
+	} else if (strncmp(argv[2], "cpu1", 4) == 0) {
+		cpu = 1;
+	} else {
+		printf("invalid cpu!\n");
+	}
+	CPU_SET(cpu, &cpuset);
+	printf("setting for cpu: %d\n", cpu);
+	up_affinity_irq(atoi(argv[1]), cpuset);
+	return;
+}
+
+void tash_irq_get_affinity(int argc, char *argv[])
+{
+	if (argc != 2) {
+		printf("irqaffget <irqnum>\n");
+		return;
+	}
+
+	int irq = atoi(argv[1]);
+	int cpuset = up_get_irq_affinity(irq);
+	printf("irqnum: %d -> cpuset: 0x%02x\n", irq, cpuset);
+	return;
+}
+
 /** @name tash_cmdlist_install
  * @brief API to register TASH command list
  * @ingroup tash
@@ -752,6 +790,9 @@ void tash_cmdlist_install(const tash_cmdlist_t list[])
 	for (map = list; map->entry; map++) {
 		tash_cmd_install(map->name, map->entry, map->exectype);
 	}
+
+	tash_cmd_install("irqaffset", tash_irq_set_affinity, TASH_EXECMD_ASYNC);
+	tash_cmd_install("irqaffget", tash_irq_get_affinity, TASH_EXECMD_ASYNC);
 }
 
 void tash_register_basic_cmds(void)

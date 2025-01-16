@@ -1456,6 +1456,19 @@ void up_disable_irq(int irq);
 #endif
 
 /****************************************************************************
+ * Name: up_affinity_irq
+ *
+ * Description:
+ *   Set an IRQ affinity by software.
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_SMP
+void up_affinity_irq(int irq, cpu_set_t cpuset);
+uint32_t up_get_irq_affinity(int irq);
+#endif
+
+/****************************************************************************
  * Name: up_prioritize_irq
  *
  * Description:

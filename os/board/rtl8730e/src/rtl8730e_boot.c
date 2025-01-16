@@ -241,7 +241,8 @@ void board_gpio_initialize(void)
 	} pins[] = {
 				{PA_23, PIN_INPUT, PullDown},
 				/* PB_20 is gpio pin number for LED */
-				{PB_20, PIN_OUTPUT, PullDown},
+				//{PB_20, PIN_OUTPUT, PullDown},
+				{PB_20, PIN_INPUT, PullDown},	// irq test
 				{PB_22, PIN_INPUT, PullUp},
 		/* NOTE: Do not open pins not for GPIO usage. E.g uart,SPI pins
 		Loguart pins

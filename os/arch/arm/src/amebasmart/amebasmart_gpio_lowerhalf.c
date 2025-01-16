@@ -94,8 +94,10 @@ struct amebasmart_lowerhalf_s {
  * Private Functions
  ****************************************************************************/
 #ifndef CONFIG_DISABLE_POLL
+#include <sched/sched.h>
 void amebasmart_gpio_interrupt(uint32_t arg, gpio_irq_event event)
 {
+	lldbg("GPIO IRQ triggered on CPU%d\n", this_cpu());
 	struct amebasmart_lowerhalf_s *lower = (struct amebasmart_lowerhalf_s *)arg;
 
 	if (lower->handler != NULL) {

@@ -509,6 +509,43 @@ int up_prioritize_irq(int irq, int priority)
 }
 
 /****************************************************************************
+ * Name: up_affinity_irq
+ *
+ * Description:
+ *   Set an IRQ affinity by software.
+ *
+ ****************************************************************************/
+
+void up_affinity_irq(int irq, cpu_set_t cpuset)
+{
+  if (irq >= AMEBASMART_IRQ_FIRST && irq < NR_IRQS)
+    {
+      uintptr_t regaddr;
+      uint32_t regval;
+
+      /* Write the new cpuset to the corresponding field in the in the
+       * distributor Interrupt Processor Target Register (GIC_ICDIPTR).
+       */
+
+      regaddr = GIC_ICDIPTR(irq);
+      regval  = getreg32(regaddr);
+      regval &= ~GIC_ICDIPTR_ID_MASK(irq);
+      regval |= GIC_ICDIPTR_ID(irq, cpuset);
+      putreg32(regval, regaddr);
+    }
+}
+
+uint32_t up_get_irq_affinity(int irq) {
+	uintptr_t regaddr = GIC_ICDIPTR(irq);
+	uint32_t regval = getreg32(regaddr);
+	printf("RAW: %8X\n", regval);
+	
+	uint8_t shift = (irq % 4) * 8;
+	uint8_t target_cpus = (regval >> shift) & 0xFF;
+	return target_cpus;
+}
+
+/****************************************************************************
  * Name: arm_gic_irq_trigger
  *
  * Description:
