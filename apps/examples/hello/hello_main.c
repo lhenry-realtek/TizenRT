@@ -56,6 +56,22 @@
 
 #include <tinyara/config.h>
 #include <stdio.h>
+ 
+#include <fcntl.h>
+#include <tinyara/fs/ioctl.h>
+#include <sys/types.h>
+#include <tinyara/mminfo.h>
+#include <debug.h>
+ 
+#define MAX_LINE 1000
+ 
+void pthread_task()
+{
+	printf("This is the second thread start\n");
+	while(1) {
+	}
+}
+
 
 /****************************************************************************
  * hello_main
@@ -68,5 +84,26 @@ int hello_main(int argc, char *argv[])
 #endif
 {
 	printf("Hello, World!!\n");
+ 
+	if (argc == 2) {
+		pthread_t thread1;
+ 		pthread_create(&thread1, NULL, pthread_task, NULL);
+ 
+		for (int i = 0; i < MAX_LINE; i++) {
+			lldbg("This is string no %d, and this is going to be printed, This one is a test line\n", i);
+		} 
+	}
+	
+	if (argc == 3) {
+		pthread_t thread1;
+		
+		pthread_create(&thread1, NULL, pthread_task, NULL);
+		
+		for (int i = 0; i < MAX_LINE; i++) {
+			lldbg("This is string no %d, and this is going to be printed, This one is a test line\n", i);
+			usleep(1);
+		} 
+	}
+	
 	return 0;
 }
